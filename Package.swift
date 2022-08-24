@@ -59,7 +59,7 @@ let package = Package(
     targets: [
         .executableTarget(name: "barcelona-mautrix", dependencies: [
             .barcelona("Barcelona"), .barcelona("BarcelonaDB"), "BarcelonaMautrixIPC", .barcelona("BarcelonaJS"), "BarcelonaFoundation", "SwiftCLI"
-        ], swiftSettings: [], linkerSettings: [])
+        ], resources: [.copy("barcelona-mautrix.entitlements")], swiftSettings: [], linkerSettings: [])
     ]
 )
 .addingLibrary(name: "BarcelonaMautrixIPC", dependencies: [
