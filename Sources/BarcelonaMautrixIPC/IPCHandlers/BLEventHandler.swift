@@ -69,7 +69,7 @@ private extension BLContact {
     }
 }
 
-public class BLEventHandler {
+public class BLEventHandler: CBPurgedAttachmentControllerDelegate {
     public static let shared = BLEventHandler()
     
     private let fifoQueue = FifoQueue<Void>()
