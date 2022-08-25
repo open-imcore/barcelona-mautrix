@@ -1,3 +1,15 @@
 .build/
 Package.resolved
 .DS_Store
+.idea
+
+*.yaml
+!example-config.yaml
+!example-registration.yaml
+
+*.session
+*.json
+*.db*
+*.log
+
+/mautrix-imessage
