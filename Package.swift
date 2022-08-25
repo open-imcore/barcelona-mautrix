@@ -42,7 +42,7 @@ let package = Package(
     dependencies: [
 //         Dependencies declare other packages that this package depends on.
 //         .package(url: /* package url */, from: "1.0.0"),
-        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", from: "1.0.0"),
+        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .revisionItem("16a7c6df36421c61356de3088478107161f4a35a")),
         .package(url: "https://github.com/open-imcore/BarcelonaFoundation", from: "1.0.2"),
         .package(url: "https://github.com/EricRabil/Paris", .branchItem("main")),
         .package(name: "FeatureFlags", url: "https://github.com/EricRabil/FeatureFlags.swift", from: "1.0.0"),
