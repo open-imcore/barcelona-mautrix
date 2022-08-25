@@ -53,7 +53,8 @@ let package = Package(
         .package(name: "Gzip", url: "https://github.com/1024jp/GzipSwift", .upToNextMajor(from: "5.1.1")),
         .package(url: "https://github.com/SwiftyContacts/SwiftyContacts", .upToNextMajor(from: "4.0.0")),
         .package(url: "https://github.com/EricRabil/ERBufferedStream", .upToNextMajor(from: "1.0.4")),
-        .package(url: "https://github.com/EricRabil/Pwomise", .upToNextMajor(from: "1.1.1"))
+        .package(url: "https://github.com/EricRabil/Pwomise", .upToNextMajor(from: "1.1.1")),
+        .package(name: "SwiftProtobuf", url: "https://github.com/apple/swift-protobuf", from: "1.20.0")
     ],
     targets: [
         .executableTarget(name: "barcelona-mautrix", dependencies: [
@@ -62,5 +63,8 @@ let package = Package(
     ]
 )
 .addingLibrary(name: "BarcelonaMautrixIPC", dependencies: [
-    "Barcelona", .barcelona("BarcelonaDB"), "SwiftyContacts", "ERBufferedStream", "Pwomise"
+    "Barcelona", .barcelona("BarcelonaDB"), "SwiftyContacts", "ERBufferedStream", "Pwomise", "BarcelonaMautrixIPCProtobuf"
+])
+.addingLibrary(name: "BarcelonaMautrixIPCProtobuf", dependencies: [
+    "SwiftProtobuf"
 ])

@@ -10,6 +10,7 @@ require (
 	github.com/tidwall/gjson v1.14.1
 	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d
 	golang.org/x/image v0.0.0-20220617043117-41969df76e82
+	google.golang.org/protobuf v1.28.1
 	maunium.net/go/mauflag v1.0.0
 	maunium.net/go/maulogger/v2 v2.3.2
 	maunium.net/go/mautrix v0.11.1-0.20220712102950-d1b82fa15bc5

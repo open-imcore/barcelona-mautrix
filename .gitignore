@@ -12,4 +12,7 @@ Package.resolved
 *.db*
 *.log
 
-/mautrix-imessage
+/mautrix-nosip/mautrix-imessage
+
+Sources/BarcelonaMautrixIPCProtobuf/ipc
+mautrix-nosip/protobuf
