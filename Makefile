@@ -10,6 +10,9 @@ KC_PATH?=login.keychain
 
 IPC_BUILD_DIR = ./ipc-built
 
+SWIFT_COMMON_FLAGS=-j 16
+SWIFT_WARN_FLAGS=-Xcc -Wno-nullability-completeness -Xcc -Wno-incomplete-umbrella -Xcc -Wno-objc-protocol-method-implementation -Xcc -Wno-arc-performSelector-leaks -Xcc -Wno-strict-prototypes -Xcc -Wno-property-attribute-mismatch -Xcc -Wno-visibility
+
 sign:
 	codesign -fs $(CODESIGN_IDENTITY) --keychain "$(KC_PATH)" --entitlements $(ENTITLEMENTS_PATH) $(BINARY_PATH)/barcelona-mautrix
 
@@ -18,7 +21,7 @@ ci-sign:
 	make sign
 
 build: ipc-v1-swift
-	swift build -Xcc -Wno-nullability-completeness -Xcc -Wno-incomplete-umbrella -Xcc -Wno-objc-protocol-method-implementation -Xcc -Wno-arc-performSelector-leaks -Xcc -Wno-strict-prototypes -Xcc -Wno-property-attribute-mismatch -Xcc -Wno-visibility $(BUILD_ARGS)
+	swift build $(SWIFT_COMMON_FLAGS) $(SWIFT_WARN_FLAGS)
 
 product-path:
 	echo $(BINARY_PATH)/barcelona-mautrix
@@ -40,7 +43,7 @@ mautrix-intel: ipc-v1-go
 	cd mautrix-nosip && CGO_CFLAGS='-I/usr/local/include/' CGO_LDFLAGS='-L/usr/local/lib/' /usr/local/bin/go build
 
 mautrix-run:
-	cd mautrix-nosip && ./mautrix-imessage
+	cd mautrix-nosip && ./imessage-nosip
 
 # IPC
 

@@ -1,7 +1,452 @@
 syntax = "proto3";
 
+option swift_prefix = "PB";
 option go_package = "mautrix-nosip/protobuf";
 
-message Hello {
-    string message = 1;
+import "google/protobuf/timestamp.proto";
+
+/*
+ Rules:
+ - timestamps are int64-encoded unix timestamps with millisecond precision
+ */
+
+message GUID {
+    string Service = 1;
+    bool IsGroup = 2;
+    string LocalID = 3;
+}
+
+message MessageTarget {
+    string GUID = 1;
+    int64 Part = 2;
+}
+
+enum TapbackType {
+    TapbackNothing = 0;
+    TapbackLove = 2000;
+    TapbackLike = 2001;
+    TapbackDislike = 2002;
+    TapbackLaugh = 2003;
+    TapbackEmphasis = 2004;
+    TapbackQuestion = 2005;
+
+    TapbackRemoveLove = 3000;
+    TapbackRemoveLike = 3001;
+    TapbackRemoveDislike = 3002;
+    TapbackRemoveLaugh = 3003;
+    TapbackRemoveEmphasis = 3004;
+    TapbackRemoveQuestion = 3005;
+}
+
+message Tapback {
+    string Target = 1;
+    TapbackType Type = 2;
+}
+
+message Attachment {
+    optional string GUID = 1;
+    string PathOnDisk = 2;
+    string FileName = 3;
+    optional string MimeType = 4;
+}
+
+enum ItemType {
+    ItemTypeMessage = 0;
+    ItemTypeMember = 1;
+    ItemTypeName = 2;
+    ItemTypeAvatar = 4;
+    ItemTypeError = 5;
+}
+
+enum GroupActionType {
+    GroupActionAdd = 0;
+	GroupActionRemove = 1;
+}
+
+message RichLinkAssetSource {
+    oneof Source {
+        string URL = 1;
+        bytes Data = 2;
+    }
+}
+
+message RichLinkAssetSize {
+    int64 Width = 1;
+    int64 Height = 2;
+}
+
+message RichLinkAsset {
+    optional string MimeType = 1;
+    optional string AccessibilityText = 2;
+    optional RichLinkAssetSource Source = 3;
+    optional string OriginalURL = 4;
+    optional RichLinkAssetSize Size = 5;
+}
+
+message RichLinkVideoAsset {
+    bool HasAudio = 1;
+    optional string YouTubeURL = 2;
+    optional string StreamingURL = 3;
+    RichLinkAsset Asset = 4;
+}
+
+message RichLink {
+    optional string OriginalURL = 1;
+    optional string URL = 2;
+    optional string Title = 3;
+    optional string Summary = 4;
+    optional string SelectedText = 5;
+    optional string SiteName = 6;
+    optional string RelatedURL = 7;
+    optional string Creator = 8;
+    optional string CreatorFacebookProfile = 9;
+    optional string CreatorTwitterUsername = 10;
+    optional string ItemType = 11;
+    optional RichLinkAsset Icon = 12;
+    optional RichLinkAsset Image = 13;
+    optional RichLinkVideoAsset Video = 14;
+    optional RichLinkAsset Audio = 19;
+    repeated RichLinkAsset Images = 15;
+    repeated RichLinkAsset Videos = 16;
+    repeated RichLinkAsset StreamingVideos = 17;
+    repeated RichLinkAsset Audios = 18;
+}
+
+message Array {
+    repeated MetadataValue Values = 1;
+}
+
+message Mapping {
+    map<string, MetadataValue> mapping = 1;
+}
+
+message MetadataValue {
+    oneof Value {
+        string String = 1;
+        double Double = 2;
+        float Float = 3;
+        int32 Int32 = 4;
+        int64 Int64 = 5;
+        uint32 UInt32 = 6;
+        uint64 UInt64 = 7;
+        sint32 SInt32 = 8;
+        sint64 SInt64 = 9;
+        fixed32 Fixed32 = 10;
+        fixed64 Fixed64 = 11;
+        sfixed32 SFIxed32 = 12;
+        sfixed64 SFixed64 = 13;
+        bool Bool = 14;
+        bytes Bytes = 15;
+        Array Array = 16;
+        Mapping Mapping = 17;
+    }
+}
+
+message Correlations {
+    optional string Sender = 1;
+    optional string Chat = 2;
+}
+
+message TextItem {
+    string Text = 1;
+    string Subject = 2;
+}
+
+message AttachmentItem {
+    Attachment Attachment = 1;
+}
+
+message TypingItem {
+    bool Typing = 1;
+}
+
+message PluginItem {
+    RichLink RichLink = 1;
+    repeated Attachment Attachments = 2;
+    optional string FallbackText = 3;
+}
+
+message GroupNameChangeItem {
+    optional string Title = 1;
+}
+
+message GroupAvatarChangeItem {
+    GroupActionType Action = 1;
+    optional Attachment NewAvatar = 2;
+}
+
+message GroupParticipantChangeItem {
+    GroupActionType Action = 1;
+    optional string Target = 2;
+    optional string Initiator = 3;
+}
+
+message TapbackItem {
+    Tapback Tapback = 1;
+}
+
+message PhantomItem {
+    string TypeString = 1;
+    string DebugDescription = 2;
+}
+
+message Item {
+    string GUID = 1;
+    oneof _ {
+        TextItem Text = 25;
+        AttachmentItem Attachment = 26;
+        TypingItem Typing = 27;
+        PluginItem Plugin = 28;
+        GroupNameChangeItem GroupNameChange = 29;
+        GroupAvatarChangeItem GroupAvatarChange = 30;
+        GroupParticipantChangeItem GroupParticipantChange = 31;
+        TapbackItem Tapback = 32;
+        PhantomItem Phantom = 33;
+    }
+}
+
+message Message {
+    string GUID = 1;
+    google.protobuf.Timestamp Time = 2;
+//    optional string Subject = 3;
+//    string Text = 4;
+    GUID ChatGUID = 5;
+    optional GUID Sender = 6;
+    // optional GUID Target = 7;
+    bool IsFromMe = 8;
+    bool IsRead = 9;
+    optional google.protobuf.Timestamp ReadAt = 10;
+    bool IsDelivered = 11;
+    bool IsSent = 12;
+//    bool IsEmote = 13;
+    bool IsAudioMessage = 14;
+    optional MessageTarget ThreadTarget = 15;
+    // optional Tapback Tapback = 16;
+    // repeated Attachment attachments = 17;
+    optional string ErrorNotice = 18;
+    // ItemType ItemType = 19;
+    // optional GroupActionType GroupActionType = 20;
+    // optional string NewGroupName = 21;
+    // optional RichLink RichLink = 22;
+    optional Mapping MessageMetadata = 23;
+    optional Correlations Correlations = 24;
+    string Service = 25;
+    repeated Item Items = 26;
+}
+
+message ReadReceipt {
+    optional GUID SenderGUID = 1;
+    bool IsFromMe = 2;
+    GUID ChatGUID = 3;
+    string ReadUpTo = 4;
+    google.protobuf.Timestamp ReadAt = 5;
+    optional Correlations Correlations = 6;
+}
+
+message TypingNotification {
+    GUID ChatGUID = 1;
+    bool Typing = 2;
+    optional Correlations Correlations = 3;
+}
+
+message Contact {
+    optional string FirstName = 1;
+    optional string LastName = 2;
+    optional string Nickname = 3;
+    optional bytes Avatar = 4;
+    repeated string Phones = 5;
+    repeated string Emails = 6;
+    optional GUID UserGUID = 7;
+    optional string PrimaryIdentifier = 8;
+    optional string CorrelationID = 9;
+}
+
+message ChatInfo {
+    GUID GUID = 1;
+    optional string DisplayName = 2;
+    repeated string Members = 3;
+    optional bool NoCreateRoom = 4;
+    optional string CorrelationID = 5;
+}
+
+message SendResponse {
+    string GUID = 1;
+    string Service = 2;
+    google.protobuf.Timestamp Time = 3;
+}
+
+message Error {
+    string Code = 1;
+    string Message = 2;
+}
+
+message SendMessageStatus {
+    string GUID = 1;
+    GUID ChatGUID = 2;
+    string Status = 3;
+    string Service = 4;
+    optional Error Error = 5;
+    optional Correlations Correlations = 6;
+}
+
+message StartupSyncHookResponse {
+    bool SkipSync = 1;
+}
+
+message SendTextMessageRequest {
+    string Text = 1;
+    optional RichLink RichLink = 2;
+}
+
+message SendMediaMessageRequest {
+    string Text = 1;
+    Attachment Attachment = 2;
+    bool IsAudioMessage = 3;
+}
+
+message SendTapbackMessageRequest {
+    MessageTarget Target = 1;
+    TapbackType Type = 2;
+}
+
+message SendMessagePart {
+    oneof Part {
+        SendTextMessageRequest Text = 1;
+        SendMediaMessageRequest Media = 2;
+        SendTapbackMessageRequest Tapback = 3;
+    }
+}
+
+message SendMessageRequest {
+    GUID ChatGUID = 1;
+    optional MessageTarget ReplyTarget = 2;
+    optional Mapping Metadata = 3;
+    repeated SendMessagePart Parts = 4;
+}
+
+message SendReadReceiptRequest {
+    GUID ChatGUID = 1;
+    string ReadUpTo = 2;
+}
+
+message SetTypingRequest {
+    GUID ChatGUID = 1;
+    bool Typing = 2;
+}
+
+message GetChatRequest {
+    GUID ChatGUID = 1;
+}
+
+message GetChatAvatarRequest {
+    GUID ChatGUID = 1;
+}
+
+message GetChatsRequest {
+    google.protobuf.Timestamp MinTimestamp = 1;
+}
+
+message GetContactRequest {
+    string Identifier = 1;
+}
+
+message GetRecentMessagesRequest {
+    GUID ChatGUID = 1;
+    int64 Limit = 2;
+}
+
+message GetMessagesAfterRequest {
+    GUID ChatGUID = 1;
+    google.protobuf.Timestamp Timestamp = 2;
+    int64 Limit = 3;
+}
+
+message ResolveIdentifierRequest {
+    string Identifier = 1;
+}
+
+message ResolveIdentifierResponse {
+    GUID GUID = 1;
+}
+
+message PrepareDMRequest {
+    GUID GUID  = 1;
+}
+
+message LogLine {
+    string Message = 1;
+    string Level = 2;
+    string Module = 3;
+    Mapping Metadata = 4;
+}
+
+message BridgeStatus {
+    string StateEvent = 1 [json_name="state_event"];
+    int64 Timestamp = 2 [json_name="timestamp"];
+    int64 TTL = 3 [json_name="ttl"];
+    string Source = 4 [json_name="source"];
+    optional string Error = 5 [json_name="error"];
+    optional string Message = 6 [json_name="message"];
+    optional string UserID = 7 [json_name="user_id"];
+    optional string RemoteID = 8 [json_name="remote_id"];
+    optional string RemoteName = 9 [json_name="remote_name"];
+    optional Mapping Info = 10 [json_name="info"];
+}
+
+message ContactList {
+    repeated Contact Contacts = 1;
+}
+
+message MessageList {
+    repeated Message Messages = 1;
+}
+
+message ChatIDList {
+    repeated GUID chats = 1;
+}
+
+message Ping {}
+message Pong {}
+
+message Payload {
+    int64 ID = 1;
+    bool IsResponse = 2;
+    oneof Command {
+        // To Mautrix
+        Message Message = 3;
+        ReadReceipt ReadReceipt = 4;
+        TypingNotification TypingNotification = 5;
+        ChatInfo Chat = 6;
+        BridgeStatus BridgeStatus = 7;
+        Contact Contact = 8;
+        SendMessageStatus SendMessageStatus = 9;
+        LogLine Log = 10;
+        ContactList Contacts = 11;
+        Error Error = 12;
+        bool Ack = 13;
+        // To Barcelona
+        SendMessageRequest SendMessage = 14;
+        SendReadReceiptRequest SendReadReceipt = 15;
+        SetTypingRequest SetTyping = 16;
+        GetChatsRequest GetChats = 17;
+        GetChatRequest GetChat = 18;
+        GetChatAvatarRequest GetChatAvatar = 19;
+        GetContactRequest GetContact = 20;
+        bool GetContactList = 21;
+        GetMessagesAfterRequest GetMessagesAfter = 22;
+        bool PreStartupSync = 23;
+        ResolveIdentifierRequest ResolveIdentifier = 24;
+        PrepareDMRequest PrepareDM = 25;
+        Ping Ping = 26;
+        Pong Pong = 27;
+        MessageList Messages = 28;
+        GetRecentMessagesRequest GetRecentMessages = 29;
+        ChatIDList ChatList = 30;
+        Attachment Attachment = 31;
+        SendResponse SendResponse = 32;
+        StartupSyncHookResponse SyncHookResponse = 33;
+        ResolveIdentifierResponse ResolveIdentifierResponse = 34;
+        bool Null = 35;
+        GUID GUID = 36;
+    }
 }

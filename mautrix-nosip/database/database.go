@@ -19,7 +19,7 @@ package database
 import (
 	_ "github.com/mattn/go-sqlite3"
 
-	"go.mau.fi/mautrix-imessage/database/upgrades"
+	"go.mau.fi/imessage-nosip/database/upgrades"
 	"maunium.net/go/mautrix/util/dbutil"
 )
 

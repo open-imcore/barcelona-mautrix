@@ -21,7 +21,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"html"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -39,10 +38,10 @@ import (
 	"maunium.net/go/mautrix/pushrules"
 	"maunium.net/go/mautrix/util/ffmpeg"
 
-	"go.mau.fi/mautrix-imessage/database"
-	"go.mau.fi/mautrix-imessage/imessage"
-	"go.mau.fi/mautrix-imessage/imessage/ios"
-	"go.mau.fi/mautrix-imessage/ipc"
+	"go.mau.fi/imessage-nosip/database"
+	"go.mau.fi/imessage-nosip/imessage"
+	"go.mau.fi/imessage-nosip/ipc"
+	pb "go.mau.fi/imessage-nosip/protobuf"
 )
 
 func (br *IMBridge) GetPortalByMXID(mxid id.RoomID) *Portal {
@@ -99,7 +98,8 @@ func (br *IMBridge) ReIDPortal(oldGUID, newGUID string) bool {
 	portal.log.Infoln("Changing chat ID to", newGUID)
 	delete(br.portalsByGUID, portal.GUID)
 	portal.Portal.ReID(newGUID)
-	portal.Identifier = imessage.ParseIdentifier(portal.GUID)
+	parsed := pb.ParseIdentifier(portal.GUID)
+	portal.Identifier = &parsed
 	portal.log = portal.bridge.Log.Sub(fmt.Sprintf("Portal/%s", portal.GUID))
 	br.portalsByGUID[portal.GUID] = portal
 	if len(portal.MXID) > 0 {
@@ -149,15 +149,16 @@ func (br *IMBridge) loadDBPortal(dbPortal *database.Portal, guid string) *Portal
 
 // newDummyPortal returns an initialized Portal with no event processing capabilities
 func (br *IMBridge) newDummyPortal(dbPortal *database.Portal) *Portal {
+	parsed := pb.ParseIdentifier(dbPortal.GUID)
 	portal := &Portal{
 		Portal: dbPortal,
 		bridge: br,
 		log:    br.Log.Sub(fmt.Sprintf("Portal/%s", dbPortal.GUID)),
 
-		Identifier:      imessage.ParseIdentifier(dbPortal.GUID),
-		Messages:        make(chan *imessage.Message, 0),
-		ReadReceipts:    make(chan *imessage.ReadReceipt, 0),
-		MessageStatuses: make(chan *imessage.SendMessageStatus, 0),
+		Identifier:      &parsed,
+		Messages:        make(chan *pb.Message, 0),
+		ReadReceipts:    make(chan *pb.ReadReceipt, 0),
+		MessageStatuses: make(chan *pb.SendMessageStatus, 0),
 		MatrixMessages:  make(chan *event.Event, 0),
 		backfillStart:   make(chan struct{}),
 	}
@@ -168,18 +169,20 @@ func (br *IMBridge) newDummyPortal(dbPortal *database.Portal) *Portal {
 }
 
 func (br *IMBridge) NewPortal(dbPortal *database.Portal) *Portal {
+	parsed := pb.ParseIdentifier(dbPortal.GUID)
 	portal := &Portal{
 		Portal: dbPortal,
 		bridge: br,
 		log:    br.Log.Sub(fmt.Sprintf("Portal/%s", dbPortal.GUID)),
 
-		Identifier:      imessage.ParseIdentifier(dbPortal.GUID),
-		Messages:        make(chan *imessage.Message, 100),
-		ReadReceipts:    make(chan *imessage.ReadReceipt, 100),
-		MessageStatuses: make(chan *imessage.SendMessageStatus, 100),
+		Identifier:      &parsed,
+		Messages:        make(chan *pb.Message, 100),
+		ReadReceipts:    make(chan *pb.ReadReceipt, 100),
+		MessageStatuses: make(chan *pb.SendMessageStatus, 100),
 		MatrixMessages:  make(chan *event.Event, 100),
 		backfillStart:   make(chan struct{}),
 	}
+	portal.incoming = NewIncomingMessageIngress(portal)
 	if !br.IM.Capabilities().MessageSendResponses {
 		portal.messageDedup = make(map[string]SentMessage)
 	}
@@ -198,9 +201,9 @@ type Portal struct {
 	bridge *IMBridge
 	log    log.Logger
 
-	Messages         chan *imessage.Message
-	ReadReceipts     chan *imessage.ReadReceipt
-	MessageStatuses  chan *imessage.SendMessageStatus
+	Messages         chan *pb.Message
+	ReadReceipts     chan *pb.ReadReceipt
+	MessageStatuses  chan *pb.SendMessageStatus
 	MatrixMessages   chan *event.Event
 	backfillStart    chan struct{}
 	backfillWait     sync.WaitGroup
@@ -208,7 +211,9 @@ type Portal struct {
 	roomCreateLock   sync.Mutex
 	messageDedup     map[string]SentMessage
 	messageDedupLock sync.Mutex
-	Identifier       imessage.Identifier
+	Identifier       *pb.GUID
+
+	incoming *IncomingMessageIngress
 
 	userIsTyping bool
 	typingLock   sync.Mutex
@@ -229,7 +234,7 @@ func (portal *Portal) ReceiveMatrixEvent(_ bridge.User, evt *event.Event) {
 	portal.MatrixMessages <- evt
 }
 
-func (portal *Portal) SyncParticipants(chatInfo *imessage.ChatInfo) {
+func (portal *Portal) SyncParticipants(chatInfo *pb.ChatInfo) {
 	for _, member := range chatInfo.Members {
 		puppet := portal.bridge.GetPuppetByLocalID(member)
 		puppet.Sync()
@@ -282,16 +287,17 @@ func (portal *Portal) mergeIntoPortal(roomID id.RoomID, tombstoneMessage string)
 	return true
 }
 
-func (portal *Portal) SyncCorrelationID(chatInfo *imessage.ChatInfo) bool {
+func (portal *Portal) SyncCorrelationID(chatInfo *pb.ChatInfo) bool {
 	if portal.Identifier.IsGroup {
 		// groups do not get correlation IDs (yet?)
 		return false
 	}
-	if len(chatInfo.CorrelationID) == 0 || chatInfo.CorrelationID == portal.CorrelationID {
+	correlationID := chatInfo.GetCorrelationID()
+	if len(correlationID) == 0 || correlationID == portal.CorrelationID {
 		// no correlation ID, or no change
 		return false
 	}
-	if existingPortal := portal.bridge.DB.Portal.GetByCorrelationID(chatInfo.CorrelationID); existingPortal != nil && existingPortal.GUID != portal.GUID {
+	if existingPortal := portal.bridge.DB.Portal.GetByCorrelationID(correlationID); existingPortal != nil && existingPortal.GUID != portal.GUID {
 		if len(existingPortal.MXID) == 0 {
 			// existing is just a row, delete it
 			existingPortal.Delete()
@@ -302,14 +308,14 @@ func (portal *Portal) SyncCorrelationID(chatInfo *imessage.ChatInfo) bool {
 		}
 	}
 	// store the correlation ID
-	portal.CorrelationID = chatInfo.CorrelationID
+	portal.CorrelationID = correlationID
 	return true
 }
 
-func (portal *Portal) SyncWithInfo(chatInfo *imessage.ChatInfo) {
+func (portal *Portal) SyncWithInfo(chatInfo *pb.ChatInfo) {
 	update := false
-	if len(chatInfo.DisplayName) > 0 {
-		update = portal.UpdateName(chatInfo.DisplayName, nil) != nil || update
+	if chatInfo.DisplayName != nil {
+		update = portal.UpdateName(*chatInfo.DisplayName, nil) != nil || update
 	}
 	update = portal.SyncCorrelationID(chatInfo) || update
 	portal.SyncParticipants(chatInfo)
@@ -411,7 +417,7 @@ func (portal *Portal) markRead(intent *appservice.IntentAPI, eventID id.EventID,
 	return intent.SetReadMarkers(portal.MXID, &content)
 }
 
-func (portal *Portal) HandleiMessageReadReceipt(rr *imessage.ReadReceipt) {
+func (portal *Portal) HandleiMessageReadReceipt(rr *pb.ReadReceipt) {
 	if len(portal.MXID) == 0 {
 		return
 	}
@@ -429,12 +435,12 @@ func (portal *Portal) HandleiMessageReadReceipt(rr *imessage.ReadReceipt) {
 	}
 
 	if message := portal.bridge.DB.Message.GetLastByGUID(portal.GUID, rr.ReadUpTo); message != nil {
-		err := portal.markRead(intent, message.MXID, rr.ReadAt)
+		err := portal.markRead(intent, message.MXID, rr.GetReadAt().AsTime())
 		if err != nil {
 			portal.log.Warnln("Failed to send read receipt for %s from %s: %v", message.MXID, intent.UserID)
 		}
 	} else if tapback := portal.bridge.DB.Tapback.GetByTapbackGUID(portal.GUID, rr.ReadUpTo); tapback != nil {
-		err := portal.markRead(intent, tapback.MXID, rr.ReadAt)
+		err := portal.markRead(intent, tapback.MXID, rr.GetReadAt().AsTime())
 		if err != nil {
 			portal.log.Warnln("Failed to send read receipt for %s from %s: %v", tapback.MXID, intent.UserID)
 		}
@@ -448,7 +454,7 @@ func (portal *Portal) handleMessageLoop() {
 	for {
 		select {
 		case msg := <-portal.Messages:
-			portal.HandleiMessage(msg, false)
+			portal.incoming.ConsumeMessage(msg)
 		case readReceipt := <-portal.ReadReceipts:
 			portal.HandleiMessageReadReceipt(readReceipt)
 		case <-portal.backfillStart:
@@ -472,7 +478,7 @@ func (portal *Portal) handleMessageLoop() {
 	}
 }
 
-func (portal *Portal) HandleiMessageSendMessageStatus(status *imessage.SendMessageStatus) {
+func (portal *Portal) HandleiMessageSendMessageStatus(status *pb.SendMessageStatus) {
 	var eventID id.EventID
 	if msg := portal.bridge.DB.Message.GetLastByGUID(portal.GUID, status.GUID); msg != nil {
 		eventID = msg.MXID
@@ -492,10 +498,10 @@ func (portal *Portal) HandleiMessageSendMessageStatus(status *imessage.SendMessa
 			return
 		}
 		errString := "internal error"
-		if len(status.Message) != 0 {
-			errString = status.Message
-		} else if len(status.StatusCode) != 0 {
-			errString = status.StatusCode
+		if len(status.GetError().GetMessage()) != 0 {
+			errString = status.Error.Message
+		} else if len(status.GetError().Code) != 0 {
+			errString = status.Error.Code
 		}
 		portal.sendErrorMessage(evt, errors.New(errString), true, bridge.MsgStatusPermFailure)
 	} else {
@@ -526,7 +532,7 @@ func (portal *Portal) backfill() {
 		}
 	}()
 
-	var messages []*imessage.Message
+	var messages []*pb.Message
 	var err error
 	lastMessage := portal.bridge.DB.Message.GetLastInChat(portal.GUID)
 	if lastMessage == nil && portal.BackfillStartTS == 0 {
@@ -548,10 +554,7 @@ func (portal *Portal) backfill() {
 		portal.log.Infofln("Backfilling %d messages", len(messages))
 		var lastReadEvent id.EventID
 		for _, message := range messages {
-			mxid := portal.HandleiMessage(message, true)
-			if message.IsRead || message.IsFromMe {
-				lastReadEvent = mxid
-			}
+			portal.incoming.ConsumeMessage(message)
 		}
 		portal.log.Infoln("Backfill finished")
 		if len(lastReadEvent) > 0 {
@@ -695,7 +698,7 @@ func (portal *Portal) GetEncryptionEventContent() (evt *event.EncryptionEventCon
 	return
 }
 
-func (portal *Portal) CreateMatrixRoom(chatInfo *imessage.ChatInfo, profileOverride *ProfileOverride) error {
+func (portal *Portal) CreateMatrixRoom(chatInfo *pb.ChatInfo, profileOverride *ProfileOverride) error {
 	portal.roomCreateLock.Lock()
 	defer portal.roomCreateLock.Unlock()
 	if len(portal.MXID) > 0 {
@@ -717,8 +720,8 @@ func (portal *Portal) CreateMatrixRoom(chatInfo *imessage.ChatInfo, profileOverr
 		}
 	}
 	if chatInfo != nil {
-		portal.Name = chatInfo.DisplayName
-		portal.CorrelationID = chatInfo.CorrelationID
+		portal.Name = chatInfo.GetDisplayName()
+		portal.CorrelationID = chatInfo.GetCorrelationID()
 	} else {
 		portal.log.Warnln("Didn't get any chat info")
 	}
@@ -808,6 +811,7 @@ func (portal *Portal) CreateMatrixRoom(chatInfo *imessage.ChatInfo, profileOverr
 	portal.bridge.portalsLock.Unlock()
 
 	portal.log.Debugln("Updating state store with initial memberships")
+
 	for _, user := range invite {
 		portal.bridge.StateStore.SetMembership(portal.MXID, user, event.MembershipInvite)
 	}
@@ -834,6 +838,9 @@ func (portal *Portal) CreateMatrixRoom(chatInfo *imessage.ChatInfo, profileOverr
 		portal.log.Debugln("Ensuring double puppet for", portal.bridge.user.MXID, "is joined to portal")
 		_ = portal.bridge.user.DoublePuppetIntent.EnsureJoined(portal.MXID)
 	}
+
+	portal.incoming.createFirstEvent()
+
 	go func() {
 		portal.disableNotifications()
 		portal.log.Debugln("Starting initial backfill")
@@ -843,13 +850,6 @@ func (portal *Portal) CreateMatrixRoom(chatInfo *imessage.ChatInfo, profileOverr
 		portal.unlockBackfill()
 	}()
 	portal.log.Debugln("Finished creating Matrix room")
-
-	if portal.bridge.IM.Capabilities().ChatBridgeResult {
-		portal.bridge.IPC.Send(ios.ReqChatBridgeResult, ios.ChatBridgeResult{
-			ChatGUID: portal.GUID,
-			MXID:     portal.MXID,
-		})
-	}
 
 	return nil
 }
@@ -889,11 +889,11 @@ func (portal *Portal) MainIntent() *appservice.IntentAPI {
 	return portal.bridge.Bot
 }
 
-func (portal *Portal) SetReply(content *event.MessageEventContent, msg *imessage.Message) {
-	if len(msg.ReplyToGUID) == 0 {
+func (portal *Portal) SetReply(content *event.MessageEventContent, msg *pb.Message) {
+	if msg.ThreadTarget == nil {
 		return
 	}
-	message := portal.bridge.DB.Message.GetByGUID(portal.GUID, msg.ReplyToGUID, msg.ReplyToPart)
+	message := portal.bridge.DB.Message.GetByGUID(portal.GUID, msg.ThreadTarget.GetGUID(), int(msg.ThreadTarget.GetPart()))
 	if message != nil {
 		evt, err := portal.MainIntent().GetEvent(portal.MXID, message.MXID)
 		if err != nil {
@@ -912,7 +912,7 @@ func (portal *Portal) SetReply(content *event.MessageEventContent, msg *imessage
 		_ = evt.Content.ParseRaw(evt.Type)
 		content.SetReply(evt)
 	} else {
-		portal.log.Debugfln("Unknown reply target %s.%d", msg.ReplyToGUID, msg.ReplyToPart)
+		portal.log.Debugfln("Unknown reply target %s.%d", msg.ThreadTarget.GetGUID(), int(msg.ThreadTarget.GetPart()))
 	}
 	return
 }
@@ -1126,14 +1126,15 @@ func (portal *Portal) HandleMatrixMessage(evt *event.Event) {
 		return
 	}
 
-	var imessageRichLink *imessage.RichLink
+	var imessageRichLink *pb.RichLink
 	if portal.bridge.IM.Capabilities().RichLinks {
 		imessageRichLink = portal.convertURLPreviewToIMessage(evt)
 	}
-	metadata, _ := evt.Content.Raw["com.beeper.message_metadata"].(imessage.MessageMetadata)
+	rawMetadata, _ := evt.Content.Raw["com.beeper.message_metadata"].(map[string]interface{})
+	metadata := pb.CreateMetadataValueFromMap(rawMetadata)
 
 	var err error
-	var resp *imessage.SendResponse
+	var resp *pb.SendResponse
 	if msg.MsgType == event.MsgText || msg.MsgType == event.MsgNotice || msg.MsgType == event.MsgEmote {
 		if evt.Sender != portal.bridge.user.MXID {
 			portal.addRelaybotFormat(evt.Sender, msg)
@@ -1152,18 +1153,14 @@ func (portal *Portal) HandleMatrixMessage(evt *event.Event) {
 		portal.log.Errorln("Error sending to iMessage:", err)
 		status := bridge.MsgStatusPermFailure
 		certain := false
-		if errors.Is(err, ipc.ErrSizeLimitExceeded) {
-			certain = true
-			status = bridge.MsgStatusUnsupported
-		}
-		var ipcErr ipc.Error
+		var ipcErr ipc.IPCError
 		if errors.As(err, &ipcErr) {
 			certain = true
 			err = errors.New(ipcErr.Message)
 			switch ipcErr.Code {
-			case ipc.ErrUnsupportedError.Code:
+			case ipc.ErrUnsupportedError.Error.Code:
 				status = bridge.MsgStatusUnsupported
-			case ipc.ErrTimeoutError.Code:
+			case ipc.ErrTimeoutError.Error.Code:
 				status = bridge.MsgStatusTimeout
 			}
 		}
@@ -1173,7 +1170,7 @@ func (portal *Portal) HandleMatrixMessage(evt *event.Event) {
 		dbMessage.ChatGUID = portal.GUID
 		dbMessage.GUID = resp.GUID
 		dbMessage.MXID = evt.ID
-		dbMessage.Timestamp = resp.Time.UnixNano() / 1e6
+		dbMessage.Timestamp = resp.Time.AsTime().UnixNano() / 1e6
 		portal.sendDeliveryReceipt(evt.ID, resp.Service, !portal.bridge.IM.Capabilities().MessageStatusCheckpoints)
 		dbMessage.Insert()
 		portal.log.Debugln("Handled Matrix message", evt.ID, "->", resp.GUID)
@@ -1182,7 +1179,7 @@ func (portal *Portal) HandleMatrixMessage(evt *event.Event) {
 	}
 }
 
-func (portal *Portal) handleMatrixMedia(msg *event.MessageEventContent, evt *event.Event, messageReplyID string, messageReplyPart int, metadata imessage.MessageMetadata) (*imessage.SendResponse, error) {
+func (portal *Portal) handleMatrixMedia(msg *event.MessageEventContent, evt *event.Event, messageReplyID string, messageReplyPart int, metadata *pb.Mapping) (*pb.SendResponse, error) {
 	var url id.ContentURI
 	var file *event.EncryptedFileInfo
 	var err error
@@ -1243,7 +1240,7 @@ func (portal *Portal) handleMatrixMedia(msg *event.MessageEventContent, evt *eve
 	return portal.handleMatrixMediaDirect(url, file, filename, caption, evt, messageReplyID, messageReplyPart, metadata)
 }
 
-func (portal *Portal) handleMatrixMediaDirect(url id.ContentURI, file *event.EncryptedFileInfo, filename, caption string, evt *event.Event, messageReplyID string, messageReplyPart int, metadata imessage.MessageMetadata) (resp *imessage.SendResponse, err error) {
+func (portal *Portal) handleMatrixMediaDirect(url id.ContentURI, file *event.EncryptedFileInfo, filename, caption string, evt *event.Event, messageReplyID string, messageReplyPart int, metadata *pb.Mapping) (resp *pb.SendResponse, err error) {
 	var data []byte
 	data, err = portal.MainIntent().DownloadBytes(url)
 	if err != nil {
@@ -1384,7 +1381,7 @@ func (portal *Portal) HandleMatrixReaction(evt *event.Event) {
 		errorMsg = fmt.Sprintf("Unknown reaction target %s", reaction.RelatesTo.EventID)
 	} else if existing := portal.bridge.DB.Tapback.GetByGUID(portal.GUID, target.GUID, target.Part, ""); existing != nil && existing.Type == tapbackType {
 		errorMsg = fmt.Sprintf("Ignoring outgoing tapback to %s/%s: type is same", reaction.RelatesTo.EventID, target.GUID)
-	} else if resp, err := portal.bridge.IM.SendTapback(portal.GUID, target.GUID, target.Part, tapbackType, false); err != nil {
+	} else if resp, err := portal.bridge.IM.SendTapback(portal.GUID, target.GUID, target.Part, tapbackType); err != nil {
 		errorMsg = fmt.Sprintf("Failed to send tapback %d to %s: %v", tapbackType, target.GUID, err)
 	} else if existing == nil {
 		// TODO should timestamp be stored?
@@ -1437,7 +1434,7 @@ func (portal *Portal) HandleMatrixRedaction(evt *event.Event) {
 	if redactedTapback != nil {
 		portal.log.Debugln("Starting handling of Matrix redaction", evt.ID)
 		redactedTapback.Delete()
-		_, err := portal.bridge.IM.SendTapback(portal.GUID, redactedTapback.MessageGUID, redactedTapback.MessagePart, redactedTapback.Type, true)
+		_, err := portal.bridge.IM.SendTapback(portal.GUID, redactedTapback.MessageGUID, redactedTapback.MessagePart, redactedTapback.Type.RemovingVariant())
 		if err != nil {
 			portal.log.Errorfln("Failed to send removal of tapback %d to %s/%d: %v", redactedTapback.Type, redactedTapback.MessageGUID, redactedTapback.MessagePart, err)
 			portal.bridge.SendMessageErrorCheckpoint(evt, bridge.MsgStepRemote, err, true, 0)
@@ -1452,7 +1449,7 @@ func (portal *Portal) HandleMatrixRedaction(evt *event.Event) {
 	portal.sendUnsupportedCheckpoint(evt, bridge.MsgStepRemote, fmt.Errorf("can't redact non-reaction event"))
 }
 
-func (portal *Portal) UpdateAvatar(attachment *imessage.Attachment, intent *appservice.IntentAPI) *id.EventID {
+func (portal *Portal) UpdateAvatar(attachment *pb.Attachment, intent *appservice.IntentAPI) *id.EventID {
 	data, err := attachment.Read()
 	if err != nil {
 		portal.log.Errorfln("Failed to read avatar attachment: %v", err)
@@ -1490,47 +1487,6 @@ func (portal *Portal) UpdateAvatar(attachment *imessage.Attachment, intent *apps
 	}
 }
 
-func (portal *Portal) isDuplicate(dbMessage *database.Message, msg *imessage.Message) bool {
-	if portal.messageDedup == nil {
-		return false
-	}
-	dedupKey := msg.Text
-	if len(msg.Attachments) == 1 {
-		dedupKey = msg.Attachments[0].FileName
-	}
-	portal.messageDedupLock.Lock()
-	dedup, isDup := portal.messageDedup[strings.TrimSpace(dedupKey)]
-	if isDup {
-		delete(portal.messageDedup, dedupKey)
-		portal.messageDedupLock.Unlock()
-		portal.log.Debugfln("Received echo for Matrix message %s -> %s", dedup.EventID, msg.GUID)
-		if !dedup.Timestamp.Before(msg.Time) {
-			portal.log.Warnfln("Echo for Matrix message %s has lower timestamp than expected (message: %s, expected: %s)", msg.Time.Unix(), dedup.Timestamp.Unix())
-		}
-		dbMessage.MXID = dedup.EventID
-		dbMessage.Insert()
-		portal.sendDeliveryReceipt(dbMessage.MXID, msg.Service, true)
-		return true
-	}
-	portal.messageDedupLock.Unlock()
-	return false
-}
-
-func (portal *Portal) handleIMAvatarChange(msg *imessage.Message, intent *appservice.IntentAPI) *id.EventID {
-	if msg.GroupActionType == imessage.GroupActionSetAvatar {
-		if len(msg.Attachments) == 1 {
-			return portal.UpdateAvatar(msg.Attachments[0], intent)
-		} else {
-			portal.log.Debugfln("Unexpected number of attachments (%d) in set avatar group action", len(msg.Attachments))
-		}
-	} else if msg.GroupActionType == imessage.GroupActionRemoveAvatar {
-		// TODO
-	} else {
-		portal.log.Warnfln("Unexpected group action type %d in avatar change item", msg.GroupActionType)
-	}
-	return nil
-}
-
 func (portal *Portal) setMembership(inviter *appservice.IntentAPI, puppet *Puppet, membership event.Membership, ts int64) *id.EventID {
 	err := inviter.EnsureInvited(portal.MXID, puppet.MXID)
 	if err != nil {
@@ -1555,24 +1511,7 @@ func (portal *Portal) setMembership(inviter *appservice.IntentAPI, puppet *Puppe
 	}
 }
 
-func (portal *Portal) handleIMMemberChange(msg *imessage.Message, dbMessage *database.Message, intent *appservice.IntentAPI) *id.EventID {
-	if len(msg.Target.LocalID) == 0 {
-		return nil
-	}
-	puppet := portal.bridge.GetPuppetByLocalID(msg.Target.LocalID)
-	puppet.Sync()
-	if msg.GroupActionType == imessage.GroupActionAddUser {
-		return portal.setMembership(intent, puppet, event.MembershipJoin, dbMessage.Timestamp)
-	} else if msg.GroupActionType == imessage.GroupActionRemoveUser {
-		// TODO make sure this won't break anything and enable it
-		//return portal.setMembership(intent, puppet, event.MembershipLeave, dbMessage.Timestamp)
-	} else {
-		portal.log.Warnfln("Unexpected group action type %d in member change item", msg.GroupActionType)
-	}
-	return nil
-}
-
-func (portal *Portal) handleIMAttachment(msg *imessage.Message, attach *imessage.Attachment, intent *appservice.IntentAPI) (*event.MessageEventContent, map[string]interface{}, error) {
+func (portal *Portal) handleIMAttachment(msg *pb.Message, attach *pb.Attachment, intent *appservice.IntentAPI) (*event.MessageEventContent, map[string]interface{}, error) {
 	data, err := attach.Read()
 	if err != nil {
 		portal.log.Errorfln("Failed to read attachment in %s: %v", msg.GUID, err)
@@ -1683,87 +1622,11 @@ func (portal *Portal) handleIMAttachment(msg *imessage.Message, attach *imessage
 	return &content, extraContent, nil
 }
 
-func (portal *Portal) handleIMAttachments(msg *imessage.Message, dbMessage *database.Message, intent *appservice.IntentAPI) {
-	if msg.Attachments == nil {
-		return
-	}
-	for index, attach := range msg.Attachments {
-		portal.log.Debugfln("Handling iMessage attachment %s.%d", msg.GUID, index)
-		mediaContent, extraContent, err := portal.handleIMAttachment(msg, attach, intent)
-		var resp *mautrix.RespSendEvent
-		if err != nil {
-			// Errors are already logged in handleIMAttachment so no need to log here, just send to Matrix room.
-			resp, err = portal.sendMessage(intent, event.EventMessage, &event.MessageEventContent{
-				MsgType: event.MsgNotice,
-				Body:    err.Error(),
-			}, extraContent, dbMessage.Timestamp)
-		} else {
-			if msg.Metadata != nil {
-				extraContent["com.beeper.message_metadata"] = msg.Metadata
-			}
-			resp, err = portal.sendMessage(intent, event.EventMessage, &mediaContent, extraContent, dbMessage.Timestamp)
-		}
-		if err != nil {
-			portal.log.Errorfln("Failed to send attachment %s.%d: %v", msg.GUID, index, err)
-		} else {
-			portal.log.Debugfln("Handled iMessage attachment %s.%d -> %s", msg.GUID, index, resp.EventID)
-			dbMessage.MXID = resp.EventID
-			dbMessage.Part = index
-			dbMessage.Insert()
-			// Attachments set the part explicitly, but a potential caption after attachments won't,
-			// so pre-set the next part index here.
-			dbMessage.Part++
-		}
-	}
-}
-
-func (portal *Portal) handleIMText(msg *imessage.Message, dbMessage *database.Message, intent *appservice.IntentAPI) {
-	msg.Text = strings.ReplaceAll(msg.Text, "\ufffc", "")
-	msg.Subject = strings.ReplaceAll(msg.Subject, "\ufffc", "")
-	if len(msg.Text) > 0 {
-		content := &event.MessageEventContent{
-			MsgType: event.MsgText,
-			Body:    msg.Text,
-		}
-		if len(msg.Subject) > 0 {
-			content.Body = fmt.Sprintf("**%s**\n%s", msg.Subject, msg.Text)
-			content.Format = event.FormatHTML
-			content.FormattedBody = fmt.Sprintf("<strong>%s</strong><br>%s", html.EscapeString(msg.Subject), html.EscapeString(msg.Text))
-		}
-		portal.SetReply(content, msg)
-		extraAttrs := map[string]interface{}{
-			bridgeInfoService: msg.Service,
-		}
-		if msg.RichLink != nil {
-			portal.log.Debugfln("Handling rich link in iMessage %s", msg.GUID)
-			linkPreview := portal.convertRichLinkToBeeper(msg.RichLink)
-			if linkPreview != nil {
-				extraAttrs["com.beeper.linkpreviews"] = []*BeeperLinkPreview{linkPreview}
-				portal.log.Debugfln("Link preview metadata converted for %s", msg.GUID)
-			}
-		}
-		if msg.Metadata != nil {
-			extraAttrs["com.beeper.message_metadata"] = msg.Metadata
-		}
-		resp, err := portal.sendMessage(intent, event.EventMessage, content, extraAttrs, dbMessage.Timestamp)
-		if err != nil {
-			portal.log.Errorfln("Failed to send message %s: %v", msg.GUID, err)
-			return
-		}
-		portal.log.Debugfln("Handled iMessage text %s.%d -> %s", msg.GUID, dbMessage.Part, resp.EventID)
-		dbMessage.MXID = resp.EventID
-		dbMessage.Insert()
-		dbMessage.Part++
-	} else if len(msg.Attachments) == 0 {
-		portal.log.Warnfln("iMessage %s doesn't contain any attachments nor text", msg.GUID)
-	}
-}
-
-func (portal *Portal) handleIMError(msg *imessage.Message, dbMessage *database.Message, intent *appservice.IntentAPI) {
-	if len(msg.ErrorNotice) > 0 {
+func (portal *Portal) handleIMError(msg *pb.Message, dbMessage *database.Message, intent *appservice.IntentAPI) {
+	if len(msg.GetErrorNotice()) > 0 {
 		content := &event.MessageEventContent{
 			MsgType: event.MsgNotice,
-			Body:    msg.ErrorNotice,
+			Body:    msg.GetErrorNotice(),
 		}
 		portal.SetReply(content, msg)
 		resp, err := portal.sendMessage(intent, event.EventMessage, content, map[string]interface{}{}, dbMessage.Timestamp)
@@ -1778,12 +1641,10 @@ func (portal *Portal) handleIMError(msg *imessage.Message, dbMessage *database.M
 	}
 }
 
-func (portal *Portal) getIntentForMessage(msg *imessage.Message, dbMessage *database.Message) *appservice.IntentAPI {
+func (portal *Portal) getIntentForMessage(msg *pb.Message, dbMessage *database.Message) *appservice.IntentAPI {
 	if msg.IsFromMe {
 		intent := portal.bridge.user.DoublePuppetIntent
-		if portal.isDuplicate(dbMessage, msg) {
-			return nil
-		} else if intent == nil {
+		if intent == nil {
 			portal.log.Debugfln("Dropping own message in %s as double puppeting is not initialized", msg.ChatGUID)
 			return nil
 		}
@@ -1802,154 +1663,6 @@ func (portal *Portal) getIntentForMessage(msg *imessage.Message, dbMessage *data
 		return puppet.Intent
 	}
 	return portal.MainIntent()
-}
-
-func (portal *Portal) HandleiMessage(msg *imessage.Message, isBackfill bool) id.EventID {
-	var dbMessage *database.Message
-	var overrideSuccess bool
-	defer func() {
-		if err := recover(); err != nil {
-			portal.log.Errorfln("Panic while handling %s: %v\n%s", msg.GUID, err, string(debug.Stack()))
-		}
-		portal.bridge.IM.SendMessageBridgeResult(portal.GUID, msg.GUID, overrideSuccess || (dbMessage != nil && len(dbMessage.MXID) > 0))
-	}()
-
-	if msg.Tapback != nil {
-		portal.HandleiMessageTapback(msg)
-		return ""
-	} else if portal.bridge.DB.Message.GetLastByGUID(portal.GUID, msg.GUID) != nil {
-		portal.log.Debugln("Ignoring duplicate message", msg.GUID)
-		// Send a success confirmation since it's a duplicate message
-		overrideSuccess = true
-		return ""
-	}
-
-	portal.log.Debugfln("Starting handling of iMessage %s (type: %d, attachments: %d, text: %d)", msg.GUID, msg.ItemType, len(msg.Attachments), len(msg.Text))
-	dbMessage = portal.bridge.DB.Message.New()
-	dbMessage.ChatGUID = portal.GUID
-	dbMessage.SenderGUID = msg.Sender.String()
-	dbMessage.GUID = msg.GUID
-	dbMessage.Timestamp = msg.Time.UnixNano() / int64(time.Millisecond)
-
-	intent := portal.getIntentForMessage(msg, dbMessage)
-	if intent == nil {
-		portal.log.Debugln("Handling of iMessage", msg.GUID, "was cancelled (didn't get an intent)")
-		return dbMessage.MXID
-	}
-
-	var groupUpdateEventID *id.EventID
-
-	switch msg.ItemType {
-	case imessage.ItemTypeMessage:
-		portal.handleIMAttachments(msg, dbMessage, intent)
-		portal.handleIMText(msg, dbMessage, intent)
-	case imessage.ItemTypeMember:
-		groupUpdateEventID = portal.handleIMMemberChange(msg, dbMessage, intent)
-	case imessage.ItemTypeName:
-		groupUpdateEventID = portal.UpdateName(msg.NewGroupName, intent)
-	case imessage.ItemTypeAvatar:
-		groupUpdateEventID = portal.handleIMAvatarChange(msg, intent)
-	case imessage.ItemTypeError:
-		// Handled below
-	default:
-		portal.log.Debugfln("Dropping message %s with unknown item type %d", msg.GUID, msg.ItemType)
-		return ""
-	}
-
-	portal.handleIMError(msg, dbMessage, intent)
-
-	if groupUpdateEventID != nil {
-		dbMessage.MXID = *groupUpdateEventID
-		dbMessage.Insert()
-	}
-
-	if len(dbMessage.MXID) > 0 {
-		portal.sendDeliveryReceipt(dbMessage.MXID, msg.Service, false)
-		if !isBackfill && !msg.IsFromMe && msg.IsRead {
-			err := portal.markRead(portal.bridge.user.DoublePuppetIntent, dbMessage.MXID, time.Time{})
-			if err != nil {
-				portal.log.Warnln("Failed to mark %s as read after bridging: %v", dbMessage.MXID, err)
-			}
-		}
-	} else {
-		portal.log.Debugfln("Unhandled message %s", msg.GUID)
-	}
-	return dbMessage.MXID
-}
-
-func (portal *Portal) HandleiMessageTapback(msg *imessage.Message) {
-	portal.log.Debugln("Starting handling of iMessage tapback", msg.GUID, "to", msg.Tapback.TargetGUID)
-	target := portal.bridge.DB.Message.GetByGUID(portal.GUID, msg.Tapback.TargetGUID, msg.Tapback.TargetPart)
-	if target == nil {
-		portal.log.Debugfln("Unknown tapback target %s.%d", msg.Tapback.TargetGUID, msg.Tapback.TargetPart)
-		return
-	}
-	var intent *appservice.IntentAPI
-	if msg.IsFromMe {
-		intent = portal.bridge.user.DoublePuppetIntent
-		if intent == nil {
-			portal.log.Debugfln("Dropping own tapback in %s as double puppeting is not initialized", msg.ChatGUID)
-			return
-		}
-	} else {
-		puppet := portal.bridge.GetPuppetByLocalID(msg.Sender.LocalID)
-		intent = puppet.Intent
-	}
-	senderGUID := msg.Sender.String()
-
-	existing := portal.bridge.DB.Tapback.GetByGUID(portal.GUID, target.GUID, target.Part, senderGUID)
-	if msg.Tapback.Remove {
-		if existing == nil {
-			return
-		}
-		_, err := intent.RedactEvent(portal.MXID, existing.MXID)
-		if err != nil {
-			portal.log.Warnfln("Failed to remove tapback from %s: %v", msg.SenderText(), err)
-		}
-		existing.Delete()
-		return
-	} else if existing != nil && existing.Type == msg.Tapback.Type {
-		portal.log.Debugfln("Ignoring tapback from %s to %s: type is same", msg.SenderText(), target.GUID)
-		return
-	}
-
-	content := &event.ReactionEventContent{
-		RelatesTo: event.RelatesTo{
-			EventID: target.MXID,
-			Type:    event.RelAnnotation,
-			Key:     msg.Tapback.Type.Emoji(),
-		},
-	}
-
-	if existing != nil {
-		if _, err := intent.RedactEvent(portal.MXID, existing.MXID); err != nil {
-			portal.log.Warnfln("Failed to redact old tapback from %s: %v", msg.SenderText(), err)
-		}
-	}
-
-	resp, err := intent.SendMessageEvent(portal.MXID, event.EventReaction, &content)
-
-	if err != nil {
-		portal.log.Errorfln("Failed to send tapback from %s: %v", msg.SenderText(), err)
-		return
-	}
-
-	if existing == nil {
-		tapback := portal.bridge.DB.Tapback.New()
-		tapback.ChatGUID = portal.GUID
-		tapback.MessageGUID = target.GUID
-		tapback.MessagePart = target.Part
-		tapback.SenderGUID = senderGUID
-		tapback.GUID = msg.GUID
-		tapback.Type = msg.Tapback.Type
-		tapback.MXID = resp.EventID
-		tapback.Insert()
-	} else {
-		existing.GUID = msg.GUID
-		existing.Type = msg.Tapback.Type
-		existing.MXID = resp.EventID
-		existing.Update()
-	}
 }
 
 func (portal *Portal) Delete() {
@@ -1984,18 +1697,18 @@ func (portal *Portal) TombstoneOrReIDIfNeeded() (retargeted, tombstoned bool) {
 	}
 	identifier := portal.Identifier
 	identifier.Service = "iMessage"
-	if replacement := portal.bridge.DB.Portal.GetByGUID(identifier.String()); replacement != nil {
+	if replacement := portal.bridge.DB.Portal.GetByGUID(identifier.ToString()); replacement != nil {
 		if len(replacement.MXID) == 0 {
-			portal.log.Infofln("ReID %s to %s for chat merging", portal.Identifier.String(), identifier.String())
+			portal.log.Infofln("ReID %s to %s for chat merging", portal.Identifier.ToString(), identifier.ToString())
 			replacement.Delete()
-			portal.ReID(identifier.String())
+			portal.ReID(identifier.ToString())
 			portal.Identifier = identifier
 			return true, false
 		}
 		return false, portal.mergeIntoPortal(replacement.MXID, "SMS rooms have been merged with iMessage rooms.")
 	} else {
-		portal.log.Infofln("ReID %s to %s for chat merging", portal.Identifier.String(), identifier.String())
-		portal.ReID(identifier.String())
+		portal.log.Infofln("ReID %s to %s for chat merging", portal.Identifier.ToString(), identifier.ToString())
+		portal.ReID(identifier.ToString())
 		portal.Identifier = identifier
 		return true, false
 	}

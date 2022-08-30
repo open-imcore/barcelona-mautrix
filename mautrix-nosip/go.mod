@@ -1,9 +1,8 @@
-module go.mau.fi/mautrix-imessage
+module go.mau.fi/imessage-nosip
 
 go 1.17
 
 require (
-	github.com/fsnotify/fsnotify v1.5.4
 	github.com/gabriel-vasile/mimetype v1.4.1
 	github.com/mattn/go-sqlite3 v1.14.14
 	github.com/strukturag/libheif v1.12.0
@@ -17,6 +16,7 @@ require (
 )
 
 require (
+	github.com/gogo/protobuf v1.3.2
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/lib/pq v1.10.6 // indirect
@@ -25,6 +25,6 @@ require (
 	github.com/tidwall/sjson v1.2.4 // indirect
 	github.com/yuin/goldmark v1.4.12 // indirect
 	golang.org/x/net v0.0.0-20220624214902-1bab6f366d9e // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

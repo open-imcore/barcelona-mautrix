@@ -1,4 +1,4 @@
--- v0 -> v14: Latest schema
+-- v0 -> v15: Latest schema
 
 CREATE TABLE portal (
 	guid        		TEXT    PRIMARY KEY,
@@ -31,6 +31,7 @@ CREATE TABLE "user" (
 
 CREATE TABLE message (
 	chat_guid     TEXT REFERENCES portal(guid) ON DELETE CASCADE ON UPDATE CASCADE,
+	guid2 		  TEXT UNIQUE,
 	guid          TEXT,
 	part          INTEGER,
 	mxid          TEXT NOT NULL UNIQUE,

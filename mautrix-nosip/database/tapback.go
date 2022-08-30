@@ -24,7 +24,7 @@ import (
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/util/dbutil"
 
-	"go.mau.fi/mautrix-imessage/imessage"
+	pb "go.mau.fi/imessage-nosip/protobuf"
 )
 
 type TapbackQuery struct {
@@ -73,7 +73,7 @@ type Tapback struct {
 	MessageGUID string
 	MessagePart int
 	SenderGUID  string
-	Type        imessage.TapbackType
+	Type        pb.TapbackType
 	MXID        id.EventID
 }
 

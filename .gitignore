@@ -15,4 +15,4 @@ Package.resolved
 /mautrix-nosip/mautrix-imessage
 
 Sources/BarcelonaMautrixIPCProtobuf/ipc
-mautrix-nosip/protobuf
+mautrix-nosip/protobuf/*.pb.go

@@ -42,7 +42,8 @@ let package = Package(
     dependencies: [
 //         Dependencies declare other packages that this package depends on.
 //         .package(url: /* package url */, from: "1.0.0"),
-        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .revisionItem("16a7c6df36421c61356de3088478107161f4a35a")),
+        // .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .revisionItem("16a7c6df36421c61356de3088478107161f4a35a")),
+        .package(name: "Barcelona", path: "../../barcelona"),
         .package(url: "https://github.com/open-imcore/BarcelonaFoundation", from: "1.0.2"),
         .package(name: "FeatureFlags", url: "https://github.com/EricRabil/FeatureFlags.swift", from: "1.0.0"),
         .package(url: "https://github.com/sendyhalim/Swime", .upToNextMajor(from: "3.0.7")),
@@ -58,7 +59,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(name: "barcelona-mautrix", dependencies: [
-            .barcelona("Barcelona"), .barcelona("BarcelonaDB"), "BarcelonaMautrixIPC", .barcelona("BarcelonaJS"), "BarcelonaFoundation", "SwiftCLI"
+            .barcelona("Barcelona"), .barcelona("BarcelonaDB"), "BarcelonaMautrixIPC", .barcelona("BarcelonaJS"), "BarcelonaFoundation", "SwiftCLI", "BarcelonaMautrixIPCProtobuf"
         ], resources: [.copy("barcelona-mautrix.entitlements")], swiftSettings: [], linkerSettings: [])
     ]
 )

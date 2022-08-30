@@ -17,7 +17,7 @@
 package config
 
 import (
-	"go.mau.fi/mautrix-imessage/imessage"
+	"go.mau.fi/imessage-nosip/imessage"
 	"maunium.net/go/mautrix/bridge/bridgeconfig"
 )
 

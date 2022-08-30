@@ -25,9 +25,8 @@ import (
 
 	log "maunium.net/go/maulogger/v2"
 
-	"maunium.net/go/mautrix/id"
-
-	"go.mau.fi/mautrix-imessage/ipc"
+	"go.mau.fi/imessage-nosip/ipc"
+	pb "go.mau.fi/imessage-nosip/protobuf"
 )
 
 var (
@@ -37,32 +36,31 @@ var (
 type API interface {
 	Start(readyCallback func()) error
 	Stop()
-	GetMessagesSinceDate(chatID string, minDate time.Time) ([]*Message, error)
-	GetMessagesWithLimit(chatID string, limit int) ([]*Message, error)
+	GetMessagesSinceDate(chatID string, minDate time.Time) ([]*pb.Message, error)
+	GetMessagesWithLimit(chatID string, limit int) ([]*pb.Message, error)
 	GetChatsWithMessagesAfter(minDate time.Time) ([]string, error)
-	MessageChan() <-chan *Message
-	ReadReceiptChan() <-chan *ReadReceipt
-	TypingNotificationChan() <-chan *TypingNotification
-	ChatChan() <-chan *ChatInfo
-	ContactChan() <-chan *Contact
-	MessageStatusChan() <-chan *SendMessageStatus
-	GetContactInfo(identifier string) (*Contact, error)
-	GetContactList() ([]*Contact, error)
-	GetChatInfo(chatID string) (*ChatInfo, error)
-	GetGroupAvatar(chatID string) (*Attachment, error)
+	MessageChan() <-chan *pb.Message
+	ReadReceiptChan() <-chan *pb.ReadReceipt
+	TypingNotificationChan() <-chan *pb.TypingNotification
+	ChatChan() <-chan *pb.ChatInfo
+	ContactChan() <-chan *pb.Contact
+	MessageStatusChan() <-chan *pb.SendMessageStatus
+	GetContactInfo(identifier string) (*pb.Contact, error)
+	GetContactList() ([]*pb.Contact, error)
+	GetChatInfo(chatID string) (*pb.ChatInfo, error)
+	GetGroupAvatar(chatID string) (*pb.Attachment, error)
 
 	ResolveIdentifier(identifier string) (string, error)
 	PrepareDM(guid string) error
 
-	SendMessage(chatID, text string, replyTo string, replyToPart int, richLink *RichLink, metadata MessageMetadata) (*SendResponse, error)
-	SendFile(chatID, text, filename string, pathOnDisk string, replyTo string, replyToPart int, mimeType string, voiceMemo bool, metadata MessageMetadata) (*SendResponse, error)
+	SendMessage(chatID, text string, replyTo string, replyToPart int, richLink *pb.RichLink, metadata *pb.Mapping) (*pb.SendResponse, error)
+	SendFile(chatID, text, filename string, pathOnDisk string, replyTo string, replyToPart int, mimeType string, voiceMemo bool, metadata *pb.Mapping) (*pb.SendResponse, error)
 	SendFileCleanup(sendFileDir string)
-	SendTapback(chatID, targetGUID string, targetPart int, tapback TapbackType, remove bool) (*SendResponse, error)
+	SendTapback(chatID, targetGUID string, targetPart int, tapback pb.TapbackType) (*pb.SendResponse, error)
 	SendReadReceipt(chatID, readUpTo string) error
 	SendTypingNotification(chatID string, typing bool) error
-	SendMessageBridgeResult(chatID, messageID string, success bool)
 
-	PreStartupSyncHook() (StartupSyncHookResponse, error)
+	PreStartupSyncHook() (hookResp *pb.StartupSyncHookResponse, err error)
 
 	Capabilities() ConnectorCapabilities
 }
@@ -83,33 +81,31 @@ func SendFilePrepare(filename string, data []byte) (string, string, error) {
 	return dir, filePath, err
 }
 
-type BridgeStatus struct {
-	StateEvent string    `json:"state_event"`
-	Timestamp  int64     `json:"timestamp"`
-	TTL        int       `json:"ttl"`
-	Source     string    `json:"source"`
-	Error      string    `json:"error,omitempty"`
-	Message    string    `json:"message,omitempty"`
-	UserID     id.UserID `json:"user_id,omitempty"`
-	RemoteID   string    `json:"remote_id,omitempty"`
-	RemoteName string    `json:"remote_name,omitempty"`
+// type BridgeStatus struct {
+// 	StateEvent string    `json:"state_event"`
+// 	Timestamp  int64     `json:"timestamp"`
+// 	TTL        int       `json:"ttl"`
+// 	Source     string    `json:"source"`
+// 	Error      string    `json:"error,omitempty"`
+// 	Message    string    `json:"message,omitempty"`
+// 	UserID     id.UserID `json:"user_id,omitempty"`
+// 	RemoteID   string    `json:"remote_id,omitempty"`
+// 	RemoteName string    `json:"remote_name,omitempty"`
 
-	Info map[string]interface{} `json:"info,omitempty"`
-}
+//		Info map[string]interface{} `json:"info,omitempty"`
+//	}
+type BridgeStatus pb.BridgeStatus
 
 type Bridge interface {
 	GetIPC() *ipc.Processor
 	GetLog() log.Logger
 	GetConnectorConfig() *PlatformConfig
-	PingServer() (start, serverTs, end time.Time)
-	SendBridgeStatus(state BridgeStatus)
+	SendBridgeStatus(state *pb.BridgeStatus)
 	ReIDPortal(oldGUID, newGUID string) bool
 	GetMessagesSince(chatGUID string, since time.Time) []string
-	SetPushKey(req *PushKeyRequest)
 }
 
 var AppleEpoch = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
-var Implementations = make(map[string]func(Bridge) (API, error))
 
 type PlatformConfig struct {
 	Platform string `yaml:"platform"`
@@ -125,21 +121,11 @@ type PlatformConfig struct {
 }
 
 func (pc *PlatformConfig) BridgeName() string {
-	switch pc.Platform {
-	case "android":
-		return "Android SMS Bridge"
-	default:
-		return "iMessage Bridge"
-	}
+	return "iMessage Bridge"
 }
 
 func NewAPI(bridge Bridge) (API, error) {
-	cfg := bridge.GetConnectorConfig()
-	impl, ok := Implementations[cfg.Platform]
-	if !ok {
-		return nil, fmt.Errorf("no such platform \"%s\", available platforms: %+v", cfg.Platform, Implementations)
-	}
-	return impl(bridge)
+	return NewiOSConnector(bridge), nil
 }
 
 func TempDir(name string) (string, error) {

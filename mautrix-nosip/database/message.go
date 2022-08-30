@@ -66,6 +66,11 @@ func (mq *MessageQuery) GetByGUID(chat string, guid string, part int) *Message {
 		"FROM message WHERE chat_guid=$1 AND guid=$2 AND part=$3", chat, guid, part)
 }
 
+func (mq *MessageQuery) GetByGUID2(chat string, guid2 string) *Message {
+	return mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
+		"FROM message WHERE chat_guid=$1 AND guid2=$2", chat, guid2)
+}
+
 func (mq *MessageQuery) GetByMXID(mxid id.EventID) *Message {
 	return mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
 		"FROM message WHERE mxid=$1", mxid)
@@ -94,6 +99,7 @@ type Message struct {
 	log log.Logger
 
 	ChatGUID   string
+	GUID2      string
 	GUID       string
 	Part       int
 	MXID       id.EventID
@@ -107,7 +113,7 @@ func (msg *Message) Time() time.Time {
 }
 
 func (msg *Message) Scan(row dbutil.Scannable) *Message {
-	err := row.Scan(&msg.ChatGUID, &msg.GUID, &msg.Part, &msg.MXID, &msg.SenderGUID, &msg.Timestamp)
+	err := row.Scan(&msg.ChatGUID, &msg.GUID2, &msg.GUID, &msg.Part, &msg.MXID, &msg.SenderGUID, &msg.Timestamp)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			msg.log.Errorln("Database scan failed:", err)
@@ -118,15 +124,15 @@ func (msg *Message) Scan(row dbutil.Scannable) *Message {
 }
 
 func (msg *Message) Insert() {
-	_, err := msg.db.Exec("INSERT INTO message (chat_guid, guid, part, mxid, sender_guid, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
-		msg.ChatGUID, msg.GUID, msg.Part, msg.MXID, msg.SenderGUID, msg.Timestamp)
+	_, err := msg.db.Exec("INSERT INTO message (chat_guid, guid2, guid, part, mxid, sender_guid, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+		msg.ChatGUID, msg.GUID2, msg.GUID, msg.Part, msg.MXID, msg.SenderGUID, msg.Timestamp)
 	if err != nil {
 		msg.log.Warnfln("Failed to insert %s.%d@%s: %v", msg.GUID, msg.Part, msg.ChatGUID, err)
 	}
 }
 
 func (msg *Message) Delete() {
-	_, err := msg.db.Exec("DELETE FROM message WHERE chat_guid=$1 AND guid=$2", msg.ChatGUID, msg.GUID)
+	_, err := msg.db.Exec("DELETE FROM message WHERE (chat_guid=$1 AND guid=$2) OR (guid2=$3)", msg.ChatGUID, msg.GUID, msg.GUID2)
 	if err != nil {
 		msg.log.Warnfln("Failed to delete %s.%d@%s: %v", msg.GUID, msg.Part, msg.ChatGUID, err)
 	}
