@@ -42,25 +42,20 @@ let package = Package(
     dependencies: [
 //         Dependencies declare other packages that this package depends on.
 //         .package(url: /* package url */, from: "1.0.0"),
-        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .revisionItem("16a7c6df36421c61356de3088478107161f4a35a")),
-        .package(url: "https://github.com/open-imcore/BarcelonaFoundation", from: "1.0.2"),
-        .package(name: "FeatureFlags", url: "https://github.com/EricRabil/FeatureFlags.swift", from: "1.0.0"),
-        .package(url: "https://github.com/sendyhalim/Swime", .upToNextMajor(from: "3.0.7")),
-        .package(url: "https://github.com/steipete/InterposeKit", .branchItem("master")),
-        .package(url: "https://github.com/jakeheis/SwiftCLI", .upToNextMajor(from: "6.0.3")),
-        .package(name: "Sentry", url: "https://github.com/getsentry/sentry-cocoa", .upToNextMajor(from: "7.15.0")),
-        .package(url: "https://github.com/Flight-School/AnyCodable", .upToNextMajor(from: "0.6.1")),
-        .package(name: "Gzip", url: "https://github.com/1024jp/GzipSwift", .upToNextMajor(from: "5.1.1")),
+        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .revisionItem("583831809d0ab120446b227b9fa9077ffd9db877")),
+//        .package(name: "Barcelona", path: "../../barcelona"),
         .package(url: "https://github.com/SwiftyContacts/SwiftyContacts", .upToNextMajor(from: "4.0.0")),
         .package(url: "https://github.com/EricRabil/ERBufferedStream", .upToNextMajor(from: "1.0.4")),
-        .package(url: "https://github.com/EricRabil/Pwomise", .upToNextMajor(from: "1.1.1"))
+        .package(name: "SwiftProtobuf", url: "https://github.com/apple/swift-protobuf", from: "1.20.0"),
+        .package(name: "GRPC", url: "https://github.com/grpc/grpc-swift.git", from: "1.9.0"),
+        .package(url: "https://github.com/EricRabil/Yammit", .upToNextMajor(from: "1.0.2"))
     ],
     targets: [
         .executableTarget(name: "barcelona-mautrix", dependencies: [
-            .barcelona("Barcelona"), .barcelona("BarcelonaDB"), "BarcelonaMautrixIPC", .barcelona("BarcelonaJS"), "BarcelonaFoundation", "SwiftCLI"
-        ], resources: [.copy("barcelona-mautrix.entitlements")], swiftSettings: [], linkerSettings: [])
+            "BarcelonaMautrixIPC"
+        ], resources: [.copy("barcelona-mautrix.entitlements")])
     ]
 )
 .addingLibrary(name: "BarcelonaMautrixIPC", dependencies: [
-    "Barcelona", .barcelona("BarcelonaDB"), "SwiftyContacts", "ERBufferedStream", "Pwomise"
+    .barcelona("Barcelona"), .barcelona("BarcelonaDB"), .barcelona("BarcelonaJS"), "SwiftyContacts", "ERBufferedStream", "Yammit"
 ])
