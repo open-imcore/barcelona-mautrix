@@ -16,7 +16,7 @@ ci-sign:
 	make sign
 
 build:
-	swift build $(BUILD_ARGS)
+	swift build $(BUILD_ARGS) -Xlinker -F/System/Library/PrivateFrameworks
 	
 product-path:
 	echo $(BINARY_PATH)/barcelona-mautrix
