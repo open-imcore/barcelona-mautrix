@@ -42,7 +42,7 @@ let package = Package(
     dependencies: [
 //         Dependencies declare other packages that this package depends on.
 //         .package(url: /* package url */, from: "1.0.0"),
-        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .revisionItem("b1a39aad6fac795a72bb3cb464ba900bc9b34225")),
+        .package(name: "Barcelona", url: "https://github.com/open-imcore/barcelona", .upToNextMajor(from: "1.0.2")),
 //        .package(name: "Barcelona", path: "../../barcelona"),
         .package(url: "https://github.com/SwiftyContacts/SwiftyContacts", .upToNextMajor(from: "4.0.0")),
         .package(url: "https://github.com/EricRabil/ERBufferedStream", .upToNextMajor(from: "1.0.4")),
