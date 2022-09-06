@@ -33,8 +33,10 @@ type MessageQuery struct {
 
 func (mq *MessageQuery) New() *Message {
 	return &Message{
-		db:  mq.db,
-		log: mq.log,
+		table: table{
+			db:  mq.db,
+			log: mq.log,
+		},
 	}
 }
 
@@ -57,33 +59,41 @@ func (mq *MessageQuery) GetIDsSince(chat string, since time.Time) (messages []st
 }
 
 func (mq *MessageQuery) GetLastByGUID(chat string, guid string) *Message {
-	return mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
+	return mq.get("SELECT chat_guid, guid2, guid, part, mxid, sender_guid, timestamp "+
 		"FROM message WHERE chat_guid=$1 AND guid=$2 ORDER BY part DESC LIMIT 1", chat, guid)
 }
 
 func (mq *MessageQuery) GetByGUID(chat string, guid string, part int) *Message {
-	return mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
+	return mq.get("SELECT chat_guid, guid2, guid, part, mxid, sender_guid, timestamp "+
 		"FROM message WHERE chat_guid=$1 AND guid=$2 AND part=$3", chat, guid, part)
 }
 
 func (mq *MessageQuery) GetByGUID2(chat string, guid2 string) *Message {
-	return mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
+	return mq.get("SELECT chat_guid, guid2, guid, part, mxid, sender_guid, timestamp "+
 		"FROM message WHERE chat_guid=$1 AND guid2=$2", chat, guid2)
 }
 
 func (mq *MessageQuery) GetByMXID(mxid id.EventID) *Message {
-	return mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
+	return mq.get("SELECT chat_guid, guid2, guid, part, mxid, sender_guid, timestamp "+
 		"FROM message WHERE mxid=$1", mxid)
 }
 
-func (mq *MessageQuery) GetLastInChat(chat string) *Message {
-	msg := mq.get("SELECT chat_guid, guid, part, mxid, sender_guid, timestamp "+
-		"FROM message WHERE chat_guid=$1 ORDER BY timestamp DESC LIMIT 1", chat)
+func (mq *MessageQuery) getAtEndInChat(chat string, order string) *Message {
+	msg := mq.get("SELECT chat_guid, guid2, guid, part, mxid, sender_guid, timestamp "+
+		"FROM message WHERE chat_guid=$1 ORDER BY timestamp "+order+" LIMIT 1", chat)
 	if msg == nil || msg.Timestamp == 0 {
 		// Old db, we don't know what the last message is.
 		return nil
 	}
 	return msg
+}
+
+func (mq *MessageQuery) GetFirstInChat(chat string) *Message {
+	return mq.getAtEndInChat(chat, "ASC")
+}
+
+func (mq *MessageQuery) GetLastInChat(chat string) *Message {
+	return mq.getAtEndInChat(chat, "DESC")
 }
 
 func (mq *MessageQuery) get(query string, args ...interface{}) *Message {
@@ -95,8 +105,7 @@ func (mq *MessageQuery) get(query string, args ...interface{}) *Message {
 }
 
 type Message struct {
-	db  *Database
-	log log.Logger
+	table
 
 	ChatGUID   string
 	GUID2      string
@@ -123,8 +132,8 @@ func (msg *Message) Scan(row dbutil.Scannable) *Message {
 	return msg
 }
 
-func (msg *Message) Insert() {
-	_, err := msg.db.Exec("INSERT INTO message (chat_guid, guid2, guid, part, mxid, sender_guid, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+func (msg *Message) Insert(txn *sql.Tx) {
+	_, err := msg.exec(txn, "INSERT INTO message (chat_guid, guid2, guid, part, mxid, sender_guid, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7)",
 		msg.ChatGUID, msg.GUID2, msg.GUID, msg.Part, msg.MXID, msg.SenderGUID, msg.Timestamp)
 	if err != nil {
 		msg.log.Warnfln("Failed to insert %s.%d@%s: %v", msg.GUID, msg.Part, msg.ChatGUID, err)

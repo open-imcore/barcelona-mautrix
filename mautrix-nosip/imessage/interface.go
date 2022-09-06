@@ -39,6 +39,7 @@ type API interface {
 	GetMessagesSinceDate(chatID string, minDate time.Time) ([]*pb.Message, error)
 	GetMessagesWithLimit(chatID string, limit int) ([]*pb.Message, error)
 	GetChatsWithMessagesAfter(minDate time.Time) ([]string, error)
+	GetMessagesWithQuery(query *pb.HistoryQuery) ([]*pb.Message, error)
 	MessageChan() <-chan *pb.Message
 	ReadReceiptChan() <-chan *pb.ReadReceipt
 	TypingNotificationChan() <-chan *pb.TypingNotification

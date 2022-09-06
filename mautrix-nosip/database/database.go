@@ -17,9 +17,12 @@
 package database
 
 import (
+	"database/sql"
+
 	_ "github.com/mattn/go-sqlite3"
 
 	"go.mau.fi/imessage-nosip/database/upgrades"
+	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/util/dbutil"
 )
 
@@ -69,4 +72,18 @@ func New(parent *dbutil.Database) *Database {
 		log: db.Log.Sub("KeyValue"),
 	}
 	return db
+}
+
+type table struct {
+	db  *Database
+	log log.Logger
+}
+
+func (t *table) exec(txn *sql.Tx, sql string, args ...interface{}) (result sql.Result, err error) {
+	if txn != nil {
+		result, err = txn.Exec(sql, args...)
+	} else {
+		result, err = t.db.Exec(sql, args...)
+	}
+	return
 }

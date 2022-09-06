@@ -33,8 +33,10 @@ type PortalQuery struct {
 
 func (pq *PortalQuery) New() *Portal {
 	return &Portal{
-		db:  pq.db,
-		log: pq.log,
+		table: table{
+			db:  pq.db,
+			log: pq.log,
+		},
 	}
 }
 
@@ -102,8 +104,7 @@ func (pq *PortalQuery) get(query string, args ...interface{}) *Portal {
 }
 
 type Portal struct {
-	db  *Database
-	log log.Logger
+	table
 
 	GUID string
 	MXID id.RoomID
@@ -160,13 +161,22 @@ func (portal *Portal) Insert() {
 	}
 }
 
-func (portal *Portal) Update() {
+func (portal *Portal) Update(txn *sql.Tx) {
 	var mxid *id.RoomID
 	if len(portal.MXID) > 0 {
 		mxid = &portal.MXID
 	}
-	_, err := portal.db.Exec("UPDATE portal SET mxid=$1, name=$2, avatar_hash=$3, avatar_url=$4, encrypted=$5, backfill_start_ts=$6, in_space=$7, correlation_id=$8 WHERE guid=$9",
-		mxid, portal.Name, portal.avatarHashSlice(), portal.AvatarURL.String(), portal.Encrypted, portal.BackfillStartTS, portal.InSpace, portal.CorrelationID, portal.GUID)
+	_, err := portal.exec(
+		txn,
+		`
+		UPDATE portal
+		SET mxid=$1, name=$2, avatar_hash=$3, avatar_url=$4, encrypted=$5,
+			backfill_start_ts=$6, in_space=$7, correlation_id=$8
+		WHERE guid=$9
+		`,
+		mxid, portal.Name, portal.avatarHashSlice(), portal.AvatarURL.String(), portal.Encrypted,
+		portal.BackfillStartTS, portal.InSpace, portal.CorrelationID, portal.GUID,
+	)
 	if err != nil {
 		portal.log.Warnfln("Failed to update %s: %v", portal.GUID, err)
 	}

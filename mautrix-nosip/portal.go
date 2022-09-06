@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gabriel-vasile/mimetype"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix"
@@ -38,6 +39,7 @@ import (
 	"maunium.net/go/mautrix/pushrules"
 	"maunium.net/go/mautrix/util/ffmpeg"
 
+	"go.mau.fi/imessage-nosip/core"
 	"go.mau.fi/imessage-nosip/database"
 	"go.mau.fi/imessage-nosip/imessage"
 	"go.mau.fi/imessage-nosip/ipc"
@@ -227,7 +229,7 @@ func (portal *Portal) IsEncrypted() bool {
 
 func (portal *Portal) MarkEncrypted() {
 	portal.Encrypted = true
-	portal.Update()
+	portal.Update(nil)
 }
 
 func (portal *Portal) ReceiveMatrixEvent(_ bridge.User, evt *event.Event) {
@@ -320,7 +322,7 @@ func (portal *Portal) SyncWithInfo(chatInfo *pb.ChatInfo) {
 	update = portal.SyncCorrelationID(chatInfo) || update
 	portal.SyncParticipants(chatInfo)
 	if update {
-		portal.Update()
+		portal.Update(nil)
 		portal.UpdateBridgeInfo()
 	}
 }
@@ -366,7 +368,7 @@ func (portal *Portal) Sync(backfill bool) {
 				portal.log.Errorln("Failed to get chat info:", err)
 			} else {
 				if portal.SyncCorrelationID(chatInfo) {
-					portal.Update()
+					portal.Update(nil)
 				}
 			}
 		}
@@ -454,7 +456,7 @@ func (portal *Portal) handleMessageLoop() {
 	for {
 		select {
 		case msg := <-portal.Messages:
-			portal.incoming.ConsumeMessage(msg)
+			portal.incoming.ProcessNewMessage(msg)
 		case readReceipt := <-portal.ReadReceipts:
 			portal.HandleiMessageReadReceipt(readReceipt)
 		case <-portal.backfillStart:
@@ -532,20 +534,28 @@ func (portal *Portal) backfill() {
 		}
 	}()
 
-	var messages []*pb.Message
-	var err error
 	lastMessage := portal.bridge.DB.Message.GetLastInChat(portal.GUID)
+
+	query := pb.HistoryQuery{}
+	limit := int64(portal.bridge.Config.Bridge.InitialBackfillLimit)
+	query.Limit = &limit
+
 	if lastMessage == nil && portal.BackfillStartTS == 0 {
 		portal.log.Debugfln("Fetching up to %d messages for initial backfill", portal.bridge.Config.Bridge.InitialBackfillLimit)
-		messages, err = portal.bridge.IM.GetMessagesWithLimit(portal.GUID, portal.bridge.Config.Bridge.InitialBackfillLimit)
+		// messages, err = portal.bridge.IM.GetMessagesWithLimit(portal.GUID, portal.bridge.Config.Bridge.InitialBackfillLimit)
 	} else if lastMessage != nil {
 		portal.log.Debugfln("Fetching messages since %s for catchup backfill", lastMessage.Time().String())
-		messages, err = portal.bridge.IM.GetMessagesSinceDate(portal.GUID, lastMessage.Time())
+		// messages, err = portal.bridge.IM.GetMessagesSinceDate(portal.GUID, lastMessage.Time())
+		query.AfterGUID = &lastMessage.GUID
 	} else if portal.BackfillStartTS != 0 {
 		startTime := time.Unix(0, portal.BackfillStartTS*int64(time.Millisecond))
 		portal.log.Debugfln("Fetching messages since %s for catchup backfill after portal recovery", startTime.String())
-		messages, err = portal.bridge.IM.GetMessagesSinceDate(portal.GUID, startTime)
+		// messages, err = portal.bridge.IM.GetMessagesSinceDate(portal.GUID, startTime)
+		query.AfterDate = timestamppb.New(startTime)
 	}
+
+	messages, err := portal.bridge.IM.GetMessagesWithQuery(&query)
+
 	if err != nil {
 		portal.log.Errorln("Failed to fetch messages for backfilling:", err)
 	} else if len(messages) == 0 {
@@ -554,8 +564,9 @@ func (portal *Portal) backfill() {
 		portal.log.Infofln("Backfilling %d messages", len(messages))
 		var lastReadEvent id.EventID
 		for _, message := range messages {
-			portal.incoming.ConsumeMessage(message)
+			portal.incoming.addMessage(message)
 		}
+		portal.incoming.Backfill(false)
 		portal.log.Infoln("Backfill finished")
 		if len(lastReadEvent) > 0 {
 			err = portal.markRead(portal.bridge.user.DoublePuppetIntent, lastReadEvent, time.Time{})
@@ -805,7 +816,7 @@ func (portal *Portal) CreateMatrixRoom(chatInfo *pb.ChatInfo, profileOverride *P
 	portal.lockBackfill()
 	portal.MXID = resp.RoomID
 	portal.log.Debugln("Storing created room ID", portal.MXID, "in database")
-	portal.Update()
+	portal.Update(nil)
 	portal.bridge.portalsLock.Lock()
 	portal.bridge.portalsByMXID[portal.MXID] = portal
 	portal.bridge.portalsLock.Unlock()
@@ -867,7 +878,7 @@ func (portal *Portal) addToSpace(user *User) {
 	} else {
 		portal.log.Debugfln("Added room to %s's personal filtering space (%s)", user.MXID, spaceID)
 		portal.InSpace = true
-		portal.Update()
+		portal.Update(nil)
 	}
 }
 
@@ -921,23 +932,30 @@ func (portal *Portal) sendMainIntentMessage(content interface{}) (*mautrix.RespS
 	return portal.sendMessage(portal.MainIntent(), event.EventMessage, content, map[string]interface{}{}, 0)
 }
 
-func (portal *Portal) sendMessage(intent *appservice.IntentAPI, eventType event.Type, content interface{}, extraContent map[string]interface{}, timestamp int64) (*mautrix.RespSendEvent, error) {
-	wrappedContent := &event.Content{Parsed: content}
+func (portal *Portal) wrapMessage(intent *appservice.IntentAPI, eventType event.Type, content interface{}, extraContent map[string]interface{}) (event.Type, event.Content, error) {
+	wrappedContent := event.Content{Parsed: content}
 	wrappedContent.Raw = extraContent
 	intent.AddDoublePuppetValue(wrappedContent)
 	if portal.Encrypted && portal.bridge.Crypto != nil {
-		err := portal.bridge.Crypto.Encrypt(portal.MXID, eventType, wrappedContent)
+		err := portal.bridge.Crypto.Encrypt(portal.MXID, eventType, &wrappedContent)
 		if err != nil {
-			return nil, fmt.Errorf("failed to encrypt event: %w", err)
+			return event.Type{}, event.Content{}, fmt.Errorf("failed to encrypt event: %w", err)
 		}
 		eventType = event.EventEncrypted
 	}
+	return eventType, wrappedContent, nil
+}
 
+func (portal *Portal) sendMessage(intent *appservice.IntentAPI, eventType event.Type, content interface{}, extraContent map[string]interface{}, timestamp int64) (*mautrix.RespSendEvent, error) {
+	wrappedType, wrappedContent, err := portal.wrapMessage(intent, eventType, content, extraContent)
+	if err != nil {
+		return nil, err
+	}
 	_, _ = intent.UserTyping(portal.MXID, false, 0)
 	if timestamp == 0 {
-		return intent.SendMessageEvent(portal.MXID, eventType, &wrappedContent)
+		return intent.SendMessageEvent(portal.MXID, wrappedType, wrappedContent)
 	} else {
-		return intent.SendMassagedMessageEvent(portal.MXID, eventType, &wrappedContent, timestamp)
+		return intent.SendMassagedMessageEvent(portal.MXID, wrappedType, wrappedContent, timestamp)
 	}
 }
 
@@ -1172,7 +1190,7 @@ func (portal *Portal) HandleMatrixMessage(evt *event.Event) {
 		dbMessage.MXID = evt.ID
 		dbMessage.Timestamp = resp.Time.AsTime().UnixNano() / 1e6
 		portal.sendDeliveryReceipt(evt.ID, resp.Service, !portal.bridge.IM.Capabilities().MessageStatusCheckpoints)
-		dbMessage.Insert()
+		dbMessage.Insert(nil)
 		portal.log.Debugln("Handled Matrix message", evt.ID, "->", resp.GUID)
 	} else {
 		portal.log.Debugln("Handled Matrix message", evt.ID, "(waiting for echo)")
@@ -1478,7 +1496,7 @@ func (portal *Portal) UpdateAvatar(attachment *pb.Attachment, intent *appservice
 			portal.log.Errorfln("Failed to set room avatar: %v", err)
 			return nil
 		}
-		portal.Update()
+		portal.Update(nil)
 		portal.UpdateBridgeInfo()
 		portal.log.Debugfln("Successfully updated room avatar (%s / %s)", portal.AvatarURL, resp.EventID)
 		return &resp.EventID
@@ -1636,19 +1654,19 @@ func (portal *Portal) handleIMError(msg *pb.Message, dbMessage *database.Message
 		}
 		portal.log.Debugfln("Handled iMessage error notice %s.%d -> %s", msg.GUID, dbMessage.Part, resp.EventID)
 		dbMessage.MXID = resp.EventID
-		dbMessage.Insert()
+		dbMessage.Insert(nil)
 		dbMessage.Part++
 	}
 }
 
-func (portal *Portal) getIntentForMessage(msg *pb.Message, dbMessage *database.Message) *appservice.IntentAPI {
+func (portal *Portal) getPuppetForMessage(msg *pb.Message) core.IPuppet {
 	if msg.IsFromMe {
-		intent := portal.bridge.user.DoublePuppetIntent
-		if intent == nil {
+		user := portal.bridge.user.DoublePuppetIntent
+		if user == nil {
 			portal.log.Debugfln("Dropping own message in %s as double puppeting is not initialized", msg.ChatGUID)
 			return nil
 		}
-		return intent
+		return core.NewIntentPuppet(user)
 	} else if len(msg.Sender.LocalID) > 0 {
 		localID := msg.Sender.LocalID
 		if portal.bridge.Config.Bridge.ForceUniformDMSenders && portal.IsPrivateChat() && msg.Sender.LocalID != portal.Identifier.LocalID {
@@ -1660,9 +1678,13 @@ func (portal *Portal) getIntentForMessage(msg *pb.Message, dbMessage *database.M
 			portal.log.Debugfln("Displayname of %s is empty, syncing before handling %s", puppet.ID, msg.GUID)
 			puppet.Sync()
 		}
-		return puppet.Intent
+		return puppet
 	}
-	return portal.MainIntent()
+	return core.NewIntentPuppet(portal.MainIntent())
+}
+
+func (portal *Portal) getIntentForMessage(msg *pb.Message, dbMessage *database.Message) *appservice.IntentAPI {
+	return portal.getPuppetForMessage(msg).GetIntent()
 }
 
 func (portal *Portal) Delete() {

@@ -304,10 +304,20 @@ func (ios *iOSConnector) GetChatsWithMessagesAfter(minDate time.Time) (resp []st
 	}
 	guids := ipcResp.GetChatList().GetChats()
 	resp = make([]string, len(guids))
-	for _, guid := range guids {
-		resp = append(resp, guid.ToString())
+	for i, guid := range guids {
+		resp[i] = guid.ToString()
 	}
 	return resp, err
+}
+
+func (ios *iOSConnector) GetMessagesWithQuery(query *pb.HistoryQuery) ([]*pb.Message, error) {
+	var resp *pb.Payload
+	err := ios.IPC.Request(context.Background(), &pb.Payload_HistoryQuery{query}, &resp)
+	messages := resp.GetMessages().GetMessages()
+	for _, msg := range messages {
+		ios.postprocessMessage(msg)
+	}
+	return messages, err
 }
 
 func (ios *iOSConnector) MessageChan() <-chan *pb.Message {
